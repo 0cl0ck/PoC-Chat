@@ -1,0 +1,31 @@
+﻿[
+  {
+    "_id": { "$oid": "666666666666666666666666" },
+    "conversationId": "C-20250915-0001",
+    "customerId": "11111111-1111-1111-1111-111111111111",
+    "status": "open",
+    "openedAt": { "$date": "2025-09-15T08:00:00Z" },
+    "lastActivityAt": { "$date": "2025-09-15T08:05:30Z" },
+    "channel": "web",
+    "messages": [
+      {
+        "messageId": "M-001",
+        "sender": {
+          "type": "customer",
+          "displayName": "Jane Doe"
+        },
+        "body": "Bonjour, je souhaite savoir si je peux modifier l'heure de retour.",
+        "sentAt": { "$date": "2025-09-15T08:01:12Z" }
+      },
+      {
+        "messageId": "M-002",
+        "sender": {
+          "type": "agent",
+          "displayName": "Support Leilani"
+        },
+        "body": "Bonjour Jane, oui c'est possible jusqu'à 48h avant le départ. Voulez-vous que je m'en occupe ?",
+        "sentAt": { "$date": "2025-09-15T08:03:47Z" }
+      }
+    ]
+  }
+]
