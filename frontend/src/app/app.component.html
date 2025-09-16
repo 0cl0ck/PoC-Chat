@@ -1,0 +1,38 @@
+<div class="container">
+  <header>
+    <h1>{{ title }}</h1>
+  </header>
+
+  <section class="settings">
+    <div class="field">
+      <label>Sender</label>
+      <input type="text" [(ngModel)]="sender" placeholder="Your name" />
+    </div>
+    <div class="field">
+      <label>Role</label>
+      <select [(ngModel)]="role">
+        <option value="CLIENT">CLIENT</option>
+        <option value="AGENT">AGENT</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Conversation</label>
+      <input type="text" [(ngModel)]="conversationId" (change)="loadHistory()"/>
+    </div>
+  </section>
+
+  <section class="chat">
+    <div id="chat-messages" class="messages">
+      <div class="message" *ngFor="let m of history">
+        <p class="sender">{{ m.sender }}<span class="meta"> ({{ m.role }})</span></p>
+        <p class="content">{{ m.content }}</p>
+      </div>
+    </div>
+
+    <form class="compose" (ngSubmit)="send()">
+      <input type="text" [(ngModel)]="message" name="message" placeholder="Type a message" required />
+      <button type="submit">Send</button>
+    </form>
+  </section>
+</div>
+

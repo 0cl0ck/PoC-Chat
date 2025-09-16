@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat PoC - Agent</title>
+    <link href="/style.css" rel="stylesheet">
+</head>
+<body data-sender="Agent" data-role="AGENT" data-conversation-id="default">
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <form id="message-form">
+            <input type="text" id="sender" placeholder="Your name" required/>
+            <input type="text" id="message-input" placeholder="Type a message..." required/>
+            <button type="submit">Send</button>
+        </form>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="/main.js"></script>
+</body>
+</html>
