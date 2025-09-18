@@ -1,229 +1,241 @@
-﻿-- Schema definition for Your Car Your Way transactional database
--- PostgreSQL DDL generated from Mermaid ER diagram
+﻿BEGIN;
 
-BEGIN;
-
--- Enum types
-CREATE TYPE user_account_status AS ENUM ('ACTIVE', 'SUSPENDED', 'DELETED');
-CREATE TYPE reservation_status AS ENUM ('PENDING', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED');
-CREATE TYPE payment_status AS ENUM ('PENDING', 'AUTHORIZED', 'CAPTURED', 'FAILED', 'REFUNDED');
-CREATE TYPE notification_status AS ENUM ('PENDING', 'SENT', 'FAILED', 'CANCELLED');
-
--- Users & identity
-CREATE TABLE app_user (
-    id               UUID PRIMARY KEY,
-    email            VARCHAR(255) NOT NULL UNIQUE,
-    password_hash    VARCHAR(255) NOT NULL,
-    status           user_account_status NOT NULL DEFAULT 'ACTIVE',
-    email_verified   BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- ==== UTILISATEURS ===================================================
+CREATE TABLE users (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  
+  -- BR: "informations personnelles (nom, prénom, date de naissance, adresse)"
+  first_name    VARCHAR(100) NOT NULL,
+  last_name     VARCHAR(100) NOT NULL,
+  birth_date    DATE,
+  phone         VARCHAR(30),
+  address_line1 VARCHAR(255),
+  address_line2 VARCHAR(255),
+  city          VARCHAR(120),
+  postal_code   VARCHAR(20),
+  country       VARCHAR(100),
+  
+  email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  is_deleted     BOOLEAN NOT NULL DEFAULT FALSE, -- BR: "Supprimer son compte"
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE user_profile (
-    user_id           UUID PRIMARY KEY REFERENCES app_user(id) ON DELETE CASCADE,
-    first_name        VARCHAR(100) NOT NULL,
-    last_name         VARCHAR(100) NOT NULL,
-    birth_date        DATE,
-    phone             VARCHAR(30),
-    marketing_opt_in  BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- ==== AGENCES (réseau Your Car Your Way) ============================
+CREATE TABLE agencies (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        VARCHAR(150) NOT NULL,
+  
+  -- BR: "ville de départ / ville de retour" 
+  city        VARCHAR(120) NOT NULL,
+  country     VARCHAR(100) NOT NULL,
+  
+  -- Infos pratiques agence
+  address     VARCHAR(255),
+  phone       VARCHAR(30),
+  email       VARCHAR(150),
+  
+  is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE user_address (
-    id             UUID PRIMARY KEY,
-    user_id        UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-    address_type   VARCHAR(30) NOT NULL,
-    line1          VARCHAR(255) NOT NULL,
-    line2          VARCHAR(255),
-    city           VARCHAR(120) NOT NULL,
-    postal_code    VARCHAR(20) NOT NULL,
-    country_iso    CHAR(2) NOT NULL,
-    timezone       VARCHAR(60) NOT NULL,
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_user_address UNIQUE (user_id, address_type)
+-- BR: "Consulter la liste des agences de location"
+CREATE INDEX idx_agencies_city ON agencies (city, is_active);
+
+-- ==== CATÉGORIES VÉHICULES (norme ACRISS) ===========================
+-- BR: "Les catégories du véhicule reprennent la norme ACRISS"
+CREATE TABLE vehicle_categories (
+  code        VARCHAR(4) PRIMARY KEY, -- Code ACRISS
+  label_en    VARCHAR(150) NOT NULL,
+  label_fr    VARCHAR(150) NOT NULL   -- BR: i18n EN/FR
 );
 
-CREATE TABLE customer_payment_method (
-    id                  UUID PRIMARY KEY,
-    user_id             UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
-    psp_token           VARCHAR(255) NOT NULL,
-    brand               VARCHAR(50) NOT NULL,
-    last4               CHAR(4) NOT NULL,
-    exp_month           SMALLINT NOT NULL CHECK (exp_month BETWEEN 1 AND 12),
-    exp_year            SMALLINT NOT NULL CHECK (exp_year >= EXTRACT(YEAR FROM CURRENT_DATE)),
-    billing_address_id  UUID REFERENCES user_address(id) ON DELETE SET NULL,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    revoked_at          TIMESTAMPTZ,
-    CONSTRAINT uq_payment_method UNIQUE (user_id, psp_token)
+-- ==== OFFRES DE LOCATION ============================================
+CREATE TABLE rental_offers (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  
+  -- BR: "ville de départ, ville de retour"
+  pickup_agency_id  UUID NOT NULL REFERENCES agencies(id),
+  dropoff_agency_id UUID NOT NULL REFERENCES agencies(id),
+  
+  -- BR: "date et heure de début, date et heure de retour"  
+  pickup_datetime   TIMESTAMPTZ NOT NULL,
+  dropoff_datetime  TIMESTAMPTZ NOT NULL,
+  
+  -- BR: "catégorie du véhicule"
+  vehicle_category  VARCHAR(4) NOT NULL REFERENCES vehicle_categories(code),
+  
+  -- BR: "tarif"
+  price_amount      NUMERIC(10,2) NOT NULL,
+  currency          CHAR(3) NOT NULL DEFAULT 'EUR',
+  
+  is_available      BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT chk_dates CHECK (dropoff_datetime > pickup_datetime),
+  CONSTRAINT chk_price CHECK (price_amount > 0)
 );
 
--- Agencies & catalog
-CREATE TABLE rental_agency (
-    id              UUID PRIMARY KEY,
-    name            VARCHAR(150) NOT NULL,
-    phone_support   VARCHAR(30),
-    email_support   VARCHAR(150),
-    timezone        VARCHAR(60) NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- BR: "formulaire de recherche avec les critères"
+CREATE INDEX idx_offer_search ON rental_offers (pickup_agency_id, dropoff_agency_id, pickup_datetime, vehicle_category, is_available);
+
+-- ==== RÉSERVATIONS ===================================================
+CREATE TABLE reservations (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES users(id),
+  offer_id   UUID NOT NULL REFERENCES rental_offers(id),
+  
+  -- Snapshot des conditions au moment de la réservation
+  pickup_datetime   TIMESTAMPTZ NOT NULL,
+  dropoff_datetime  TIMESTAMPTZ NOT NULL,
+  pickup_agency_name VARCHAR(150) NOT NULL,
+  dropoff_agency_name VARCHAR(150) NOT NULL,
+  pickup_city       VARCHAR(120) NOT NULL,
+  dropoff_city      VARCHAR(120) NOT NULL,
+  vehicle_category  VARCHAR(150) NOT NULL,
+  total_amount      NUMERIC(10,2) NOT NULL,
+  currency          CHAR(3) NOT NULL,
+  
+  status       VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING, CONFIRMED, CANCELLED
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT chk_reservation_dates CHECK (dropoff_datetime > pickup_datetime),
+  CONSTRAINT chk_total CHECK (total_amount > 0)
 );
 
-CREATE TABLE agency_location (
-    id            UUID PRIMARY KEY,
-    agency_id     UUID NOT NULL UNIQUE REFERENCES rental_agency(id) ON DELETE CASCADE,
-    line1         VARCHAR(255) NOT NULL,
-    line2         VARCHAR(255),
-    city          VARCHAR(120) NOT NULL,
-    postal_code   VARCHAR(20) NOT NULL,
-    country_iso   CHAR(2) NOT NULL,
-    latitude      NUMERIC(10,6),
-    longitude     NUMERIC(10,6)
+-- BR: "Consulter l'historique de ses réservations (passées et en cours)"
+CREATE INDEX idx_reservations_user ON reservations (user_id, created_at DESC);
+CREATE INDEX idx_reservations_dates ON reservations (pickup_datetime, dropoff_datetime);
+
+-- ==== PAIEMENTS STRIPE ===============================================
+CREATE TABLE payments (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reservation_id  UUID NOT NULL UNIQUE REFERENCES reservations(id) ON DELETE CASCADE,
+  amount          NUMERIC(10,2) NOT NULL,
+  currency        CHAR(3) NOT NULL,
+  stripe_intent_id VARCHAR(255) NOT NULL UNIQUE,
+  status          VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING, CAPTURED, FAILED
+  captured_at     TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT chk_payment_amount CHECK (amount > 0)
 );
 
-CREATE TABLE agency_schedule (
-    id              UUID PRIMARY KEY,
-    agency_id       UUID NOT NULL REFERENCES rental_agency(id) ON DELETE CASCADE,
-    weekday         SMALLINT NOT NULL CHECK (weekday BETWEEN 0 AND 6),
-    opens_at        TIME,
-    closes_at       TIME,
-    closed_all_day  BOOLEAN NOT NULL DEFAULT FALSE,
-    CONSTRAINT uq_agency_schedule UNIQUE (agency_id, weekday)
+-- ==== REMBOURSEMENTS (BR: politique annulation 25%) =================
+CREATE TABLE refunds (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  payment_id      UUID NOT NULL REFERENCES payments(id),
+  amount          NUMERIC(10,2) NOT NULL, -- 25% si < 1 semaine
+  stripe_refund_id VARCHAR(255) NOT NULL UNIQUE,
+  reason          VARCHAR(100), -- 'CANCELLATION', 'MODIFICATION'  
+  processed_at    TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  
+  CONSTRAINT chk_refund_amount CHECK (amount > 0)
 );
 
-CREATE TABLE vehicle_category (
-    code_acriss  VARCHAR(4) PRIMARY KEY,
-    segment      VARCHAR(100) NOT NULL,
-    label_en     VARCHAR(150) NOT NULL,
-    label_fr     VARCHAR(150) NOT NULL
+-- ==== WEBHOOKS STRIPE ================================================
+CREATE TABLE stripe_webhook_events (
+  id         TEXT PRIMARY KEY, -- Stripe event ID
+  type       TEXT NOT NULL,
+  payload    JSONB NOT NULL,
+  processed  BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE rental_offer (
-    id                 UUID PRIMARY KEY,
-    agency_pickup_id   UUID NOT NULL REFERENCES rental_agency(id) ON DELETE RESTRICT,
-    agency_dropoff_id  UUID NOT NULL REFERENCES rental_agency(id) ON DELETE RESTRICT,
-    code_acriss        VARCHAR(4) NOT NULL REFERENCES vehicle_category(code_acriss) ON DELETE RESTRICT,
-    pickup_at          TIMESTAMPTZ NOT NULL,
-    dropoff_at         TIMESTAMPTZ NOT NULL,
-    base_price_amount  NUMERIC(10,2) NOT NULL,
-    currency           CHAR(3) NOT NULL,
-    stock_total        INTEGER NOT NULL CHECK (stock_total >= 0),
-    last_sync_at       TIMESTAMPTZ,
-    CONSTRAINT uq_offer UNIQUE (agency_pickup_id, agency_dropoff_id, code_acriss, pickup_at, dropoff_at)
+CREATE INDEX idx_webhook_processed ON stripe_webhook_events (processed, created_at);
+
+-- ==== NOTIFICATIONS EMAIL ============================================
+-- BR: "Recevoir un email de confirmation après réservation"
+-- BR: "Recevoir un email en cas de modification ou annulation"  
+CREATE TABLE email_notifications (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reservation_id UUID REFERENCES reservations(id) ON DELETE SET NULL,
+  recipient      VARCHAR(255) NOT NULL,
+  template_type  VARCHAR(50) NOT NULL, -- 'CONFIRMATION', 'MODIFICATION', 'CANCELLATION'
+  template_data  JSONB NOT NULL,
+  status         VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING, SENT, FAILED
+  sent_at        TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rental_offer_pickup ON rental_offer (pickup_at);
-CREATE INDEX idx_rental_offer_dropoff ON rental_offer (dropoff_at);
+CREATE INDEX idx_notifications_pending ON email_notifications (status, created_at) WHERE status = 'PENDING';
 
--- Reservations & drivers
-CREATE TABLE reservation (
-    id                     UUID PRIMARY KEY,
-    user_id                UUID NOT NULL REFERENCES app_user(id) ON DELETE RESTRICT,
-    offer_id               UUID NOT NULL REFERENCES rental_offer(id) ON DELETE RESTRICT,
-    pickup_at              TIMESTAMPTZ NOT NULL,
-    dropoff_at             TIMESTAMPTZ NOT NULL,
-    status                 reservation_status NOT NULL,
-    total_amount           NUMERIC(10,2) NOT NULL,
-    currency               CHAR(3) NOT NULL,
-    terms_accepted         BOOLEAN NOT NULL DEFAULT FALSE,
-    cancellation_fee_pct   NUMERIC(5,2) NOT NULL DEFAULT 0,
-    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_reservation_period CHECK (dropoff_at > pickup_at)
-);
+-- ==== DONNÉES DE RÉFÉRENCE ===========================================
+-- BR: norme ACRISS obligatoire
+INSERT INTO vehicle_categories (code, label_en, label_fr) VALUES
+  ('ECAR', 'Economy Car', 'Voiture Économique'),
+  ('CCAR', 'Compact Car', 'Voiture Compacte'), 
+  ('ICAR', 'Intermediate Car', 'Voiture Intermédiaire'),
+  ('SCAR', 'Standard Car', 'Voiture Standard'),
+  ('FCAR', 'Full Size Car', 'Voiture Grande Taille'),
+  ('PCAR', 'Premium Car', 'Voiture Premium'),
+  ('LCAR', 'Luxury Car', 'Voiture de Luxe');
 
-CREATE INDEX idx_reservation_user ON reservation (user_id);
-CREATE INDEX idx_reservation_status ON reservation (status);
-CREATE INDEX idx_reservation_pickup ON reservation (pickup_at);
+-- Exemples d'agences (réseau international)
+INSERT INTO agencies (name, city, country, address, phone, email) VALUES
+  ('Your Car Your Way London', 'London', 'United Kingdom', '123 Oxford Street', '+44 20 1234 5678', 'london@yourcar.com'),
+  ('Your Car Your Way Paris', 'Paris', 'France', '456 Champs-Élysées', '+33 1 23 45 67 89', 'paris@yourcar.com'),
+  ('Your Car Your Way Berlin', 'Berlin', 'Germany', '789 Unter den Linden', '+49 30 1234 5678', 'berlin@yourcar.com'),
+  ('Your Car Your Way Madrid', 'Madrid', 'Spain', '321 Gran Vía', '+34 91 123 45 67', 'madrid@yourcar.com'),
+  ('Your Car Your Way New York', 'New York', 'United States', '654 5th Avenue', '+1 212 123 4567', 'newyork@yourcar.com'),
+  ('Your Car Your Way Los Angeles', 'Los Angeles', 'United States', '987 Sunset Boulevard', '+1 323 123 4567', 'la@yourcar.com');
 
-CREATE TABLE reservation_driver (
-    reservation_id   UUID PRIMARY KEY REFERENCES reservation(id) ON DELETE CASCADE,
-    first_name       VARCHAR(100) NOT NULL,
-    last_name        VARCHAR(100) NOT NULL,
-    birth_date       DATE NOT NULL,
-    license_country  CHAR(2) NOT NULL,
-    license_number   VARCHAR(50) NOT NULL
-);
+-- ==== VUES POUR SIMPLIFIER LES REQUÊTES =============================
 
-CREATE TABLE reservation_status_history (
-    id              BIGSERIAL PRIMARY KEY,
-    reservation_id  UUID NOT NULL REFERENCES reservation(id) ON DELETE CASCADE,
-    from_status     reservation_status,
-    to_status       reservation_status NOT NULL,
-    changed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    changed_by      VARCHAR(60) NOT NULL,
-    comment         VARCHAR(255)
-);
+-- Vue pour la recherche d'offres (BR: formulaire de recherche)
+CREATE VIEW offer_search AS
+SELECT 
+  ro.id,
+  ro.pickup_datetime,
+  ro.dropoff_datetime,
+  ro.price_amount,
+  ro.currency,
+  
+  ap.city AS pickup_city,
+  ap.name AS pickup_agency,
+  ad.city AS dropoff_city,
+  ad.name AS dropoff_agency,
+  
+  vc.code AS vehicle_code,
+  vc.label_en AS vehicle_category_en,
+  vc.label_fr AS vehicle_category_fr,
+  
+  ro.is_available
+  
+FROM rental_offers ro
+  JOIN agencies ap ON ro.pickup_agency_id = ap.id
+  JOIN agencies ad ON ro.dropoff_agency_id = ad.id
+  JOIN vehicle_categories vc ON ro.vehicle_category = vc.code
+WHERE ro.is_available = TRUE;
 
-CREATE INDEX idx_status_history_reservation ON reservation_status_history (reservation_id);
-CREATE INDEX idx_status_history_changed_at ON reservation_status_history (changed_at);
-
--- Payments
-CREATE TABLE reservation_payment (
-    id              UUID PRIMARY KEY,
-    reservation_id  UUID NOT NULL UNIQUE REFERENCES reservation(id) ON DELETE CASCADE,
-    amount          NUMERIC(10,2) NOT NULL,
-    currency        CHAR(3) NOT NULL,
-    status          payment_status NOT NULL,
-    psp_intent_id   VARCHAR(255) NOT NULL,
-    captured_at     TIMESTAMPTZ,
-    failure_reason  VARCHAR(255)
-);
-
-CREATE INDEX idx_payment_intent ON reservation_payment (psp_intent_id);
-
-CREATE TABLE payment_refund (
-    id             UUID PRIMARY KEY,
-    payment_id     UUID NOT NULL REFERENCES reservation_payment(id) ON DELETE CASCADE,
-    amount         NUMERIC(10,2) NOT NULL,
-    status         payment_status NOT NULL DEFAULT 'REFUNDED',
-    psp_refund_id  VARCHAR(255) NOT NULL,
-    processed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_payment_refund_payment ON payment_refund (payment_id);
-
--- Stripe webhook events
-CREATE TABLE stripe_webhook_event (
-    id                TEXT PRIMARY KEY,
-    type              TEXT NOT NULL,
-    received_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    payment_intent_id TEXT,
-    payload           JSONB
-);
-
-CREATE INDEX idx_webhook_pi ON stripe_webhook_event (payment_intent_id);
--- Notifications & audit
-CREATE TABLE notification_outbox (
-    id               UUID PRIMARY KEY,
-    reservation_id   UUID REFERENCES reservation(id) ON DELETE SET NULL,
-    channel          VARCHAR(30) NOT NULL,
-    template         VARCHAR(100) NOT NULL,
-    payload          JSONB NOT NULL,
-    status           notification_status NOT NULL DEFAULT 'PENDING',
-    attempt_count    INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at  TIMESTAMPTZ,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_notification_status ON notification_outbox (status);
-CREATE INDEX idx_notification_created_at ON notification_outbox (created_at);
-
-CREATE TABLE audit_log (
-    id           UUID PRIMARY KEY,
-    user_id      UUID REFERENCES app_user(id) ON DELETE SET NULL,
-    action       VARCHAR(60) NOT NULL,
-    entity_type  VARCHAR(60) NOT NULL,
-    entity_id    UUID,
-    metadata     JSONB,
-    ip_address   INET,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_audit_user ON audit_log (user_id);
-CREATE INDEX idx_audit_entity ON audit_log (entity_type, entity_id);
-CREATE INDEX idx_audit_created_at ON audit_log (created_at);
+-- Vue pour l'historique des réservations (BR: historique passées et en cours)
+CREATE VIEW reservation_history AS
+SELECT 
+  r.id,
+  r.pickup_datetime,
+  r.dropoff_datetime,
+  r.pickup_city,
+  r.dropoff_city,
+  r.pickup_agency_name,
+  r.dropoff_agency_name,
+  r.vehicle_category,
+  r.total_amount,
+  r.currency,
+  r.status,
+  r.created_at,
+  
+  u.email,
+  u.first_name,
+  u.last_name,
+  
+  p.status AS payment_status
+  
+FROM reservations r
+  JOIN users u ON r.user_id = u.id
+  LEFT JOIN payments p ON r.id = p.reservation_id;
 
 COMMIT;
-
-
